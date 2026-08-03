@@ -1,0 +1,4 @@
+interface:
+  display_name: "X-µµ¸é"
+  short_description: "Monochrome patent drawing generator and validator"
+  default_prompt: "Use $x-drawing to turn this invention description into filing-oriented monochrome SVG patent figures."

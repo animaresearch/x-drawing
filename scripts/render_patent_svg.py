@@ -11,9 +11,11 @@ from pathlib import Path
 import sys
 
 
-KINDS = {"system", "flow", "state", "sequence"}
+KINDS = {"system", "flow", "state", "sequence", "exploded"}
 SHAPES = {"rect", "round", "ellipse"}
 MAX_NODES = 20
+PART_TYPES = {"cover", "frame", "board", "block", "tray"}
+MAX_PARTS = 8
 STYLE_PRESETS = {
     "default": {"stroke_width": "0.7", "label_size": "4", "ref_size": "3.2", "edge_dash": "3 2"},
     "compact": {"stroke_width": "0.7", "label_size": "3.6", "ref_size": "3.2", "edge_dash": "2 1.5"},
@@ -35,6 +37,9 @@ def load_spec(path: Path) -> dict:
         raise ValueError("title must be a non-empty string")
     if data.get("kind") not in KINDS:
         raise ValueError(f"kind must be one of: {', '.join(sorted(KINDS))}")
+    if data["kind"] == "exploded":
+        validate_exploded(data)
+        return data
     nodes = data.get("nodes")
     if not isinstance(nodes, list) or not 1 <= len(nodes) <= MAX_NODES:
         raise ValueError(f"nodes must contain 1-{MAX_NODES} objects")
@@ -120,6 +125,116 @@ def load_spec(path: Path) -> dict:
                     or not 8 <= point[0] <= 202 or not 20 <= point[1] <= 235):
                 raise ValueError(f"edge {index} has an invalid via point")
     return data
+
+
+def _number(value: object, low: float, high: float, name: str) -> float:
+    if (not isinstance(value, (int, float)) or isinstance(value, bool)
+            or not math.isfinite(value) or not low <= value <= high):
+        raise ValueError(f"{name} must be numeric within {low}-{high}")
+    return float(value)
+
+
+def _positions(value: object, name: str, limit: int = 8) -> None:
+    if not isinstance(value, list) or len(value) > limit:
+        raise ValueError(f"{name} must be a list of up to {limit} positions")
+    for index, point in enumerate(value):
+        if not isinstance(point, dict) or set(point) != {"u", "v"}:
+            raise ValueError(f"{name}[{index}] needs only u and v")
+        _number(point["u"], 0.05, 0.95, f"{name}[{index}].u")
+        _number(point["v"], 0.05, 0.95, f"{name}[{index}].v")
+
+
+def validate_exploded(spec: dict) -> None:
+    """Validate an explicit hardware stack without inferring unlisted details."""
+    if any(key in spec for key in ("nodes", "edges", "groups")):
+        raise ValueError("exploded figures use parts, not nodes, edges, or groups")
+    if spec.get("projection", "dimetric") != "dimetric":
+        raise ValueError("exploded projection must be dimetric")
+    if spec.get("reference_style", "leader") != "leader":
+        raise ValueError("exploded reference_style must be leader")
+    if spec.get("style", "default") not in STYLE_PRESETS:
+        raise ValueError("style must be default or compact")
+    stack = spec.get("stack", {})
+    if not isinstance(stack, dict) or set(stack) - {"cx", "gap", "guides"}:
+        raise ValueError("stack accepts only cx, gap, and guides")
+    _number(stack.get("cx", 100), 60, 140, "stack.cx")
+    _number(stack.get("gap", 8), 2, 25, "stack.gap")
+    if not isinstance(stack.get("guides", True), bool):
+        raise ValueError("stack.guides must be boolean")
+    parts = spec.get("parts")
+    if not isinstance(parts, list) or not 1 <= len(parts) <= MAX_PARTS:
+        raise ValueError(f"parts must contain 1-{MAX_PARTS} objects")
+    ids: set[str] = set()
+    refs: set[str] = set()
+    common = {"id", "type", "ref", "label", "width", "depth", "thickness"}
+    detail_fields = {
+        "cover": {"vents", "holes"},
+        "frame": {"wall", "gasket"},
+        "board": {"chips", "holes", "traces"},
+        "block": {"poles", "terminals"},
+        "tray": {"inset", "holes"},
+    }
+    for index, part in enumerate(parts):
+        if not isinstance(part, dict):
+            raise ValueError(f"part {index} must be an object")
+        part_id, kind, ref = part.get("id"), part.get("type"), str(part.get("ref", ""))
+        if not isinstance(part_id, str) or not part_id.strip() or part_id in ids:
+            raise ValueError(f"part {index} has a missing or duplicate id")
+        if not isinstance(kind, str) or kind not in PART_TYPES:
+            raise ValueError(f"part {part_id} has an unsupported type")
+        if set(part) - common - detail_fields[kind]:
+            raise ValueError(f"part {part_id} has unsupported fields for type {kind}")
+        if not isinstance(part.get("label"), str) or not part["label"].strip():
+            raise ValueError(f"part {part_id} needs a label")
+        if not ref.isdigit() or ref in refs:
+            raise ValueError(f"part {part_id} needs a unique numeric ref")
+        ids.add(part_id)
+        refs.add(ref)
+        _number(part.get("width"), 20, 100, f"part {part_id} width")
+        _number(part.get("depth"), 15, 70, f"part {part_id} depth")
+        _number(part.get("thickness"), 0.5, 25, f"part {part_id} thickness")
+        if "holes" in part:
+            _positions(part["holes"], f"part {part_id} holes")
+        if kind == "cover":
+            vents = part.get("vents", 0)
+            if not isinstance(vents, int) or isinstance(vents, bool) or not 0 <= vents <= 8:
+                raise ValueError(f"part {part_id} vents must be an integer within 0-8")
+        elif kind == "frame":
+            _number(part.get("wall", 0.1), 0.04, 0.25, f"part {part_id} wall")
+            if not isinstance(part.get("gasket", False), bool):
+                raise ValueError(f"part {part_id} gasket must be boolean")
+        elif kind == "board":
+            traces = part.get("traces", 0)
+            if not isinstance(traces, int) or isinstance(traces, bool) or not 0 <= traces <= 6:
+                raise ValueError(f"part {part_id} traces must be an integer within 0-6")
+            chips = part.get("chips", [])
+            if not isinstance(chips, list) or len(chips) > 4:
+                raise ValueError(f"part {part_id} chips must be a list of up to four chips")
+            for chip_index, chip in enumerate(chips):
+                if not isinstance(chip, dict) or set(chip) - {"u", "v", "w", "d", "h"}:
+                    raise ValueError(f"part {part_id} chip {chip_index} has unsupported fields")
+                for field, low, high in (("u", 0.1, 0.9), ("v", 0.1, 0.9),
+                                         ("w", 0.05, 0.4), ("d", 0.05, 0.4), ("h", 0.5, 8)):
+                    _number(chip.get(field), low, high, f"part {part_id} chip {chip_index} {field}")
+                if (chip["u"] - chip["w"] / 2 < 0.05 or chip["u"] + chip["w"] / 2 > 0.95
+                        or chip["v"] - chip["d"] / 2 < 0.05 or chip["v"] + chip["d"] / 2 > 0.95):
+                    raise ValueError(f"part {part_id} chip {chip_index} extends outside the board")
+                if index > 0 and chip["h"] > stack.get("gap", 8):
+                    raise ValueError(f"part {part_id} chip {chip_index} is taller than the gap above the board")
+        elif kind == "block":
+            poles = part.get("poles", [])
+            if not isinstance(poles, list) or len(poles) > 2:
+                raise ValueError(f"part {part_id} poles must be a list of up to two poles")
+            for pole in poles:
+                if not isinstance(pole, dict) or set(pole) != {"u", "sign"}:
+                    raise ValueError(f"part {part_id} pole needs u and sign")
+                _number(pole["u"], 0.1, 0.9, f"part {part_id} pole u")
+                if not isinstance(pole["sign"], str) or pole["sign"] not in {"+", "-"}:
+                    raise ValueError(f"part {part_id} pole sign must be + or -")
+            if not isinstance(part.get("terminals", False), bool):
+                raise ValueError(f"part {part_id} terminals must be boolean")
+        elif kind == "tray":
+            _number(part.get("inset", 0.1), 0.04, 0.25, f"part {part_id} inset")
 
 
 def path_order(nodes: list[dict], edges: list[dict]) -> list[str] | None:
@@ -225,6 +340,8 @@ def path_midpoint(points: list[tuple[float, float]]) -> tuple[float, float]:
 
 
 def render(spec: dict) -> str:
+    if spec["kind"] == "exploded":
+        return render_exploded(spec)
     style = STYLE_PRESETS[spec.get("style", "default")]
     reference_style = spec.get("reference_style", "inside")
     nodes = auto_layout(spec["kind"], spec["nodes"], spec.get("corners", "round"),
@@ -323,6 +440,165 @@ def render(spec: dict) -> str:
         parts.append(f'<text x="{x}" y="{y}" fill="#000" font-family="{FONT_FAMILY}" font-size="3.4">{escape(ref)}: {escape(label)}</text>')
     parts.append('</svg>')
     return "\n".join(parts) + "\n"
+
+
+def _face(cx: float, cy: float, width: float, depth: float) -> list[tuple[float, float]]:
+    """Projected top plane, ordered left, back, right, front."""
+    ux, uy = width * 0.75, width * 0.28
+    vx, vy = depth * 0.75, -depth * 0.28
+    left = (cx - (ux + vx) / 2, cy - (uy + vy) / 2)
+    back = (left[0] + vx, left[1] + vy)
+    right = (back[0] + ux, back[1] + uy)
+    front = (left[0] + ux, left[1] + uy)
+    return [left, back, right, front]
+
+
+def _top_uv(face: list[tuple[float, float]], u: float, v: float) -> tuple[float, float]:
+    left, back, _, front = face
+    return (left[0] + u * (front[0] - left[0]) + v * (back[0] - left[0]),
+            left[1] + u * (front[1] - left[1]) + v * (back[1] - left[1]))
+
+
+def _points(points: list[tuple[float, float]]) -> str:
+    return " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+
+
+def _polygon(points: list[tuple[float, float]], fill: str = "#fff") -> str:
+    return f'<polygon points="{_points(points)}" fill="{fill}"/>'
+
+
+def _slab(cx: float, cy: float, width: float, depth: float, thickness: float,
+          draw_top: bool = True) -> tuple[list[str], list[tuple[float, float]]]:
+    face = _face(cx, cy, width, depth)
+    left, _, right, front = face
+    down = lambda point: (point[0], point[1] + thickness)
+    result = [
+        _polygon([left, front, down(front), down(left)]),
+        _polygon([front, right, down(right), down(front)]),
+    ]
+    if draw_top:
+        result.append(_polygon(face))
+    return result, face
+
+
+def _inner_face(face: list[tuple[float, float]], margin: float) -> list[tuple[float, float]]:
+    return [_top_uv(face, margin, margin), _top_uv(face, margin, 1 - margin),
+            _top_uv(face, 1 - margin, 1 - margin), _top_uv(face, 1 - margin, margin)]
+
+
+def _exploded_layout(spec: dict) -> list[dict]:
+    parts = [dict(part) for part in spec["parts"]]
+    stack = spec.get("stack", {})
+    gap = float(stack.get("gap", 8))
+    cx = float(stack.get("cx", 100))
+    for part in parts:
+        part["_face_height"] = 0.28 * (part["width"] + part["depth"])
+        part["_height"] = part["_face_height"] + part["thickness"]
+    total_height = sum(part["_height"] for part in parts) + gap * (len(parts) - 1)
+    band_top, band_bottom = 25.0, 235.0
+    if total_height > band_bottom - band_top:
+        raise ValueError("exploded stack is too tall; reduce part size, thickness, gap, or count")
+    cursor = band_top + (band_bottom - band_top - total_height) / 2
+    for part in parts:
+        part["_cx"] = cx
+        part["_cy"] = cursor + part["_face_height"] / 2
+        part["_face"] = _face(cx, part["_cy"], part["width"], part["depth"])
+        left = min(point[0] for point in part["_face"])
+        right = max(point[0] for point in part["_face"])
+        if left < 14 or right > 165:
+            raise ValueError(f"part {part['id']} exceeds horizontal drawing area")
+        cursor += part["_height"] + gap
+    return parts
+
+
+def render_exploded(spec: dict) -> str:
+    """Render a structured single-stack exploded diagram on the filing-sized page."""
+    parts = _exploded_layout(spec)
+    style = STYLE_PRESETS[spec.get("style", "default")]
+    result = [
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 297" width="210mm" height="297mm" role="img">',
+        '<title>' + escape(f"도 {spec['figure']} {spec['title']}") + '</title>',
+        '<rect x="0" y="0" width="210" height="297" fill="#fff"/>',
+        f'<g fill="none" stroke="#000" stroke-width="{style["stroke_width"]}" stroke-linecap="round" stroke-linejoin="round">',
+    ]
+    if spec.get("stack", {}).get("guides", True) and len(parts) > 1:
+        widest = max(parts, key=lambda part: max(p[0] for p in part["_face"]) - min(p[0] for p in part["_face"]))
+        guide_xs = sorted({round(point[0], 2) for point in widest["_face"]})
+        for x in guide_xs:
+            aligned = [part for part in parts if min(p[0] for p in part["_face"]) - 0.01 <= x <= max(p[0] for p in part["_face"]) + 0.01]
+            if len(aligned) < 2:
+                continue
+            y_start = max(point[1] for point in aligned[0]["_face"]) + aligned[0]["thickness"]
+            y_end = aligned[-1]["_cy"]
+            result.append(f'<line class="exploded-guide" x1="{x:.2f}" y1="{y_start:.2f}" x2="{x:.2f}" y2="{y_end:.2f}" stroke-width="0.35" stroke-dasharray="2 2"/>')
+
+    for part in parts:
+        face = part["_face"]
+        cx, cy = part["_cx"], part["_cy"]
+        width, depth, thickness = part["width"], part["depth"], part["thickness"]
+        kind = part["type"]
+        if kind == "frame":
+            sides, _ = _slab(cx, cy, width, depth, thickness, draw_top=False)
+            result.extend(sides)
+            inner = _inner_face(face, float(part.get("wall", 0.1)))
+            outer_path = "M" + " L".join(f"{x:.2f},{y:.2f}" for x, y in face) + " Z"
+            inner_path = "M" + " L".join(f"{x:.2f},{y:.2f}" for x, y in inner) + " Z"
+            result.append(f'<path d="{outer_path} {inner_path}" fill="#fff" fill-rule="evenodd"/>')
+            if part.get("gasket"):
+                second = _inner_face(face, min(0.46, float(part.get("wall", 0.1)) + 0.04))
+                result.append(_polygon(second, fill="none"))
+        else:
+            slab, _ = _slab(cx, cy, width, depth, thickness)
+            result.extend(slab)
+            if kind == "tray":
+                inner = _inner_face(face, float(part.get("inset", 0.1)))
+                result.append(_polygon(inner, fill="none"))
+        for hole in part.get("holes", []):
+            x, y = _top_uv(face, hole["u"], hole["v"])
+            result.append(f'<ellipse cx="{x:.2f}" cy="{y:.2f}" rx="1.25" ry="0.55" fill="#fff" stroke-width="0.4"/>')
+        if kind == "cover":
+            for index in range(part.get("vents", 0)):
+                u = 0.5 if part["vents"] == 1 else 0.34 + index * 0.32 / (part["vents"] - 1)
+                a = _top_uv(face, u, 0.32); b = _top_uv(face, u, 0.65)
+                result.append(f'<line x1="{a[0]:.2f}" y1="{a[1]:.2f}" x2="{b[0]:.2f}" y2="{b[1]:.2f}" stroke-width="0.45"/>')
+        elif kind == "board":
+            for index in range(part.get("traces", 0)):
+                u = 0.12 + index * 0.045
+                a = _top_uv(face, u, 0.1); b = _top_uv(face, u, 0.72)
+                result.append(f'<line x1="{a[0]:.2f}" y1="{a[1]:.2f}" x2="{b[0]:.2f}" y2="{b[1]:.2f}" stroke-width="0.3"/>')
+            for chip in part.get("chips", []):
+                chip_x, chip_y = _top_uv(face, chip["u"], chip["v"])
+                chip_shape, _ = _slab(chip_x, chip_y - chip["h"], width * chip["w"],
+                                      depth * chip["d"], chip["h"])
+                result.extend(chip_shape)
+        elif kind == "block":
+            if len(part.get("poles", [])) == 2:
+                a = _top_uv(face, 0.5, 0); b = _top_uv(face, 0.5, 1)
+                result.append(f'<line x1="{a[0]:.2f}" y1="{a[1]:.2f}" x2="{b[0]:.2f}" y2="{b[1]:.2f}" stroke-width="0.4"/>')
+            for pole in part.get("poles", []):
+                x, y = _top_uv(face, pole["u"], 0.5)
+                if part.get("terminals"):
+                    result.append(f'<ellipse cx="{x:.2f}" cy="{y:.2f}" rx="1.2" ry="0.55" fill="#fff" stroke-width="0.35"/>')
+                result.append(f'<text x="{x:.2f}" y="{y-1:.2f}" text-anchor="middle" fill="#000" stroke="none" font-family="Arial, sans-serif" font-size="4">{pole["sign"]}</text>')
+
+    for part in parts:
+        right_corner = part["_face"][2]
+        label_y = part["_cy"] + 1.2
+        result.append(f'<path d="M{right_corner[0]:.2f},{right_corner[1]:.2f} Q{(right_corner[0]+178)/2:.2f},{label_y-3:.2f} 178,{label_y:.2f}" fill="none" stroke-width="0.35"/>')
+        result.append(f'<text x="181" y="{label_y+1:.2f}" fill="#000" stroke="none" font-family="{FONT_FAMILY}" font-size="3.8">{escape(str(part["ref"]))}</text>')
+    result.append('</g>')
+    result.append(f'<text x="105" y="12" text-anchor="middle" fill="#000" font-family="{FONT_FAMILY}" font-size="5" font-weight="700">{escape(f"【도 {spec['figure']}】 {spec['title']}")}</text>')
+    result.append('<line x1="15" y1="246" x2="195" y2="246" stroke="#000" stroke-width="0.5"/>')
+    result.append(f'<text x="15" y="253" fill="#000" font-family="{FONT_FAMILY}" font-size="3.8" font-weight="700">부호의 설명</text>')
+    legend = [(str(part["ref"]), part["label"]) for part in parts]
+    for index, (ref, label) in enumerate(sorted(legend, key=lambda item: int(item[0]))):
+        col, row = index % 2, index // 2
+        x, y = 15 + col * 90, 260 + row * 6
+        if y > 290:
+            raise ValueError("exploded symbol legend exceeds page; split the figure")
+        result.append(f'<text x="{x}" y="{y}" fill="#000" font-family="{FONT_FAMILY}" font-size="3.4">{escape(ref)}: {escape(label)}</text>')
+    result.append('</svg>')
+    return "\n".join(result) + "\n"
 
 
 def main() -> int:

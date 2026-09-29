@@ -84,3 +84,37 @@ set. Record which figure contains each claimed component or step, and flag claim
 corresponding figure where a figure is needed. Check every label, reference numeral, optional
 designation, and omitted element against the source materials. This is a manual drafting review;
 the renderer and SVG auditor cannot verify claim coverage or disclosure support.
+
+## Exploded hardware figures
+
+Use `kind: "exploded"` with a top-to-bottom `parts` list instead of `nodes`, `edges`, or
+`groups`. See [the runnable example](../examples/exploded-module.json). A single vertical stack
+of 1–8 parts is supported. Each part needs a unique `id`, unique numeric `ref`, short `label`,
+`type`, `width`, `depth`, and `thickness`. Dimensions are schematic drawing units; the fixed
+dimetric projection is not a mechanical scale drawing.
+
+| `type` | Explicit optional details |
+|---|---|
+| `cover` | `vents` (0–8 slots); `holes` (up to 8 top-face positions) |
+| `frame` | `wall` (0.04–0.25 of footprint); `gasket` (additional inner outline) |
+| `board` | `chips` (up to 4 raised boxes); `holes`; `traces` (0–6) |
+| `block` | `poles` (up to 2, each with `u` and `sign`); `terminals` |
+| `tray` | `inset` (0.04–0.25 of footprint); `holes` |
+
+`width` is 20–100, `depth` 15–70, and `thickness` 0.5–25. Top-face positions use normalized
+`u` and `v` coordinates from 0 to 1. Holes are `{ "u": 0.1, "v": 0.1 }`; a chip uses its
+center `u`/`v`, relative `w`/`d`, and raised height `h`. Chip-level reference numerals are
+currently unsupported and rejected; only parts appear in the legend. Poles use
+`{"u": 0.3, "sign": "+"}` or `"-"`. A chip's raised height cannot exceed the gap above its board.
+Every detail is absent unless supplied. Part-type-specific fields on the wrong type are rejected.
+
+Optional `stack` accepts `cx` (60–140, default 100), `gap` (2–25, default 8), and `guides`
+(boolean, default true). Guides are dashed vertical alignment lines behind the parts. The
+renderer rejects a stack that exceeds the page, parts that extend too far horizontally, and
+legends that exceed the available area. The figure uses the same A4 viewBox, monochrome audit,
+heading, and symbol legend as the block diagrams. `reference_style` is `leader` for exploded
+figures.
+
+This is a reproducible first-pass schematic. It does not support side-by-side subassemblies,
+freeform fasteners, arbitrary viewing angles, or exact reproduction of an existing mechanical
+drawing. Visually inspect every output against the invention materials before using it.

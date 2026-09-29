@@ -1,0 +1,37 @@
+{
+  "figure": 1,
+  "title": "모듈 조립체의 분해도",
+  "kind": "exploded",
+  "stack": {"cx": 100, "gap": 8, "guides": true},
+  "parts": [
+    {
+      "id": "cover", "type": "cover", "ref": "100", "label": "상부 덮개",
+      "width": 70, "depth": 45, "thickness": 4, "vents": 5,
+      "holes": [
+        {"u": 0.07, "v": 0.08}, {"u": 0.93, "v": 0.08},
+        {"u": 0.07, "v": 0.92}, {"u": 0.93, "v": 0.92}
+      ]
+    },
+    {
+      "id": "frame", "type": "frame", "ref": "200", "label": "프레임",
+      "width": 70, "depth": 45, "thickness": 1, "wall": 0.09
+    },
+    {
+      "id": "board", "type": "board", "ref": "300", "label": "회로기판",
+      "width": 68, "depth": 42, "thickness": 2, "traces": 3,
+      "chips": [
+        {"u": 0.44, "v": 0.48, "w": 0.24, "d": 0.28, "h": 4},
+        {"u": 0.70, "v": 0.60, "w": 0.16, "d": 0.20, "h": 3}
+      ]
+    },
+    {
+      "id": "power", "type": "block", "ref": "400", "label": "전원부",
+      "width": 45, "depth": 28, "thickness": 8,
+      "poles": [{"u": 0.30, "sign": "+"}, {"u": 0.70, "sign": "-"}]
+    },
+    {
+      "id": "tray", "type": "tray", "ref": "500", "label": "하부 케이스",
+      "width": 70, "depth": 45, "thickness": 8, "inset": 0.10
+    }
+  ]
+}

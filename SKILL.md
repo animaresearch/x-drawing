@@ -1,6 +1,6 @@
 ---
 name: x-drawing
-description: Generate and audit filing-oriented monochrome patent drawings as self-contained SVG from invention descriptions or structured JSON. Use when the user asks for X-도면, patent figures, system/block diagrams, process flows, state diagrams, reference numerals, symbol legends, or black-and-white technical drawings for a patent draft.
+description: Generate and audit filing-oriented monochrome patent drawings as self-contained SVG from invention descriptions or structured JSON. Use when the user asks for X-도면, patent figures, system/block diagrams, process flows, state diagrams, hardware exploded views, reference numerals, symbol legends, or black-and-white technical drawings for a patent draft.
 ---
 
 # X-Drawing
@@ -14,7 +14,8 @@ Create restrained black-and-white patent figures. Do not generate presentation g
    - system/block diagram for components and boundaries;
    - flow diagram for method steps;
    - state diagram for transitions;
-   - sequence diagram only when call order is essential.
+   - sequence diagram only when call order is essential;
+   - exploded diagram when a disclosed physical assembly needs its parts shown apart.
 3. Assign stable reference numerals. Reuse the same numeral for the same element across figures.
 4. Map claimed components and steps to the proposed figures. Flag a claim with no useful figure, an unsupported figure element, or a change of terminology. Create one JSON file per figure using [references/specification.md](references/specification.md).
 5. Render with `scripts/render_patent_svg.py`.
@@ -32,6 +33,7 @@ python scripts/audit_patent_svg.py figure.svg
 
 - Use black strokes and white fill with no decorative colour, gradient, shadow, icon, or texture. Use monochrome hatching only when it marks a blocked component or path in the source drawing.
 - Preserve disclosed system boundaries, blocked paths, read-only diagnostic paths, and subordinate reference numerals when they matter to the figure. Use `groups`, node `hatch`/`subparts`, and edge `style`/`via` as documented in [references/specification.md](references/specification.md).
+- For `kind: "exploded"`, use an explicit top-to-bottom `parts` list and only the stated holes, vents, chips, traces, poles, and inset. Check the generated projection and leaders at print size. This schematic preset does not reproduce arbitrary mechanical geometry or a specific camera angle.
 - Use `corners: "square"` for square boxes and a built-in `style` preset for a repeatable look. Keep the default appearance for existing figures.
 - Set `optional: true` only for a source-supported optional component and provide that node's `source` note. It draws a dashed border and a legend annotation. A solid border by itself does not mean legally required.
 - Use SVG `viewBox="0 0 210 297"` and system sans-serif fonts; require no network access.

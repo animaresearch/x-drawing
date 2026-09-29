@@ -215,6 +215,72 @@ def test_group_hatch_and_routed_paths() -> None:
         assert rejected.returncode == 2
 
 
+def test_exploded_view() -> None:
+    example = json.loads((ROOT.parent / "examples" / "exploded-module.json").read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory() as temp:
+        source = Path(temp) / "figure.json"
+        output = Path(temp) / "figure.svg"
+
+        def run(spec: dict) -> subprocess.CompletedProcess[str]:
+            source.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(ROOT / "render_patent_svg.py"), str(source), str(output)],
+                capture_output=True, text=True, encoding="utf-8",
+            )
+
+        rendered = run(example)
+        assert rendered.returncode == 0, rendered.stderr
+        root = ET.parse(output).getroot()
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+        guides = [line for line in root.findall(".//svg:line", ns) if line.get("class") == "exploded-guide"]
+        assert len(guides) == 4
+        assert len(root.findall(".//svg:polygon", ns)) >= 15
+        svg = output.read_text(encoding="utf-8")
+        assert 'fill-rule="evenodd"' in svg
+        assert all(f"{ref}: " in svg for ref in ("100", "200", "300", "400", "500"))
+        assert "부호의 설명" in svg
+        audit = subprocess.run(
+            [sys.executable, str(ROOT / "audit_patent_svg.py"), str(output)],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        assert audit.returncode == 0, audit.stdout + audit.stderr
+        assert "WARNING" not in audit.stdout
+
+        two = dict(example)
+        two["parts"] = [example["parts"][0], example["parts"][-1]]
+        two["stack"] = {"guides": False}
+        assert run(two).returncode == 0
+        assert "exploded-guide" not in output.read_text(encoding="utf-8")
+
+        cases = [
+            (lambda spec: spec["parts"][0].update(type="unknown"), "unsupported type"),
+            (lambda spec: spec["parts"][0].update(type=["cover"]), "unsupported type"),
+            (lambda spec: spec["parts"][1].update(ref="100"), "unique numeric ref"),
+            (lambda spec: spec["parts"][2].update(vents=3), "unsupported fields"),
+            (lambda spec: spec["parts"][3]["poles"][0].update(sign="x"), "pole sign"),
+            (lambda spec: spec["parts"][3]["poles"][0].update(sign=["+"]), "pole sign"),
+            (lambda spec: spec["parts"][2]["chips"][0].update(u=0.98), "chip 0 u"),
+            (lambda spec: spec["parts"][2]["chips"][0].update(ref="310", label="연산 칩"), "unsupported fields"),
+            (lambda spec: spec["parts"][2]["chips"][0].update(h=9), "chip 0 h"),
+            (lambda spec: spec.update(stack={"gap": 2}), "taller than the gap"),
+            (lambda spec: spec.update(stack={"gap": 25}), "too tall"),
+            (lambda spec: spec.update(stack={"cx": 140}), "horizontal drawing area"),
+        ]
+        for mutate, fragment in cases:
+            invalid = json.loads(json.dumps(example))
+            mutate(invalid)
+            rejected = run(invalid)
+            assert rejected.returncode == 2, fragment
+            assert fragment in rejected.stderr, rejected.stderr
+
+        legacy = {
+            "figure": 2, "title": "기존 구성도", "kind": "system",
+            "nodes": [{"id": "a", "label": "장치", "ref": "10"}], "parts": [{"unused": True}],
+        }
+        assert run(legacy).returncode == 0
+        assert "exploded-guide" not in output.read_text(encoding="utf-8")
+
+
 def main() -> int:
     spec = {
         "figure": 1,
@@ -250,6 +316,7 @@ def main() -> int:
     test_leaders_and_connected_layout()
     test_legacy_and_grid_layouts()
     test_group_hatch_and_routed_paths()
+    test_exploded_view()
     print("X-Drawing tests: PASS")
     return 0
 

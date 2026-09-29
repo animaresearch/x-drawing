@@ -43,6 +43,10 @@ def main() -> int:
         warnings.append("symbol legend heading not found")
     if not re.search(r"【도\s*\d+】", text):
         warnings.append("figure number heading not found")
+    if any(element.get("stroke-dasharray") for element in root.iter()
+           if element.tag.split("}")[-1] in {"rect", "ellipse"}
+           and element.get("class") != "system-group"):
+        warnings.append("dashed component found; check its source note in the figure JSON")
     status = "PASS" if not errors else "FAIL"
     print(f"{status}: {args.svg}")
     for message in errors:
